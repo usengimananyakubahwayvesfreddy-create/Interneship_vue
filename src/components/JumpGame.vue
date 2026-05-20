@@ -1,9 +1,9 @@
 <template>
   <div class="game-container">
-    <!-- Score Display -->
+    <!-- Score Display mapped from Vuex -->
     <div class="score-board">Score: {{ score }}</div>
 
-    <!-- Game Over Screen -->
+    <!-- Game Over Screen reading from Vuex -->
     <div v-if="gameOver" class="game-over-screen">
       <h2>Game Over</h2>
       <p>Final Score: {{ score }}</p>
@@ -30,55 +30,89 @@ export default {
   name: 'JumpGame',
   data() {
     return {
-      score: 0,
-      gameOver: false,
       obstaclePosition: {
         x: 500
       },
       isJumping: false,
       animationFrameId: null,
-      obstaclePassed: false
+      obstaclePassed: false,
+      bgAudio: null,
+      jumpAudio: null,
+      gameOverAudio: null
     };
   },
+  computed: {
+    // Read state parameters directly out of the shared Vuex instance
+    score() {
+      return this.$store.state.score;
+    },
+    gameOver() {
+      return this.$store.state.gameOver;
+    }
+  },
   mounted() {
+    this.initAudio();
     this.startGame();
     window.addEventListener('keydown', this.handleKeyDown);
   },
   beforeUnmount() {
-    // Vue 3 Lifecycle Hook clean-up
     window.removeEventListener('keydown', this.handleKeyDown);
+    this.stopAllAudio();
     if (this.animationFrameId) {
       cancelAnimationFrame(this.animationFrameId);
     }
   },
   methods: {
+    initAudio() {
+      this.bgAudio = new Audio('/background.mp3');
+      this.jumpAudio = new Audio('/jump.mp3');
+      this.gameOverAudio = new Audio('/sound.mp3');
+      this.bgAudio.loop = true;
+      this.bgAudio.volume = 0.4;
+    },
+    stopAllAudio() {
+      if (this.bgAudio) {
+        this.bgAudio.pause();
+        this.bgAudio.currentTime = 0;
+      }
+      if (this.jumpAudio) {
+        this.jumpAudio.pause();
+        this.jumpAudio.currentTime = 0;
+      }
+      if (this.gameOverAudio) {
+        this.gameOverAudio.pause();
+        this.gameOverAudio.currentTime = 0;
+      }
+    },
     startGame() {
+      this.bgAudio.play().catch(() => {
+        console.log("Audio waiting for interaction");
+      });
       this.gameLoop();
     },
     gameLoop() {
       if (this.gameOver) return;
 
-      // Move obstacle left
       this.obstaclePosition.x -= 5;
 
-      // Reset obstacle when it goes completely off-screen
       if (this.obstaclePosition.x < -40) {
         this.obstaclePosition.x = 600;
-        this.obstaclePassed = false; // Allow scoring on next pass
+        this.obstaclePassed = false;
       }
 
-      // Check conditions
       this.checkScore();
       this.checkCollision();
 
-      // Continue loop if game is active
       if (!this.gameOver) {
         this.animationFrameId = requestAnimationFrame(this.gameLoop);
       }
     },
     handleKeyDown(event) {
       if (event.code === 'Space') {
-        event.preventDefault(); // Stop webpage scrolling
+        event.preventDefault();
+        if (this.bgAudio && this.bgAudio.paused && !this.gameOver) {
+          this.bgAudio.play().catch(() => {});
+        }
         this.jump();
       }
     },
@@ -86,7 +120,10 @@ export default {
       if (this.isJumping || this.gameOver) return;
       
       this.isJumping = true;
-      // Handles jump time length (500ms match CSS transition)
+      if (this.jumpAudio) {
+        this.jumpAudio.currentTime = 0;
+        this.jumpAudio.play().catch(() => {});
+      }
       setTimeout(() => {
         this.isJumping = false;
       }, 500);
@@ -97,7 +134,6 @@ export default {
 
       if (!player || !obstacle) return;
 
-      // Real-time boundary calculation matching screen coordinates
       const pRect = player.getBoundingClientRect();
       const oRect = obstacle.getBoundingClientRect();
 
@@ -108,23 +144,31 @@ export default {
         pRect.top < oRect.bottom;
 
       if (standardCollision) {
-        this.gameOver = true;
+        // Dispatch action to Vuex to change state global tracking
+        this.$store.dispatch('setGameOver', true);
         cancelAnimationFrame(this.animationFrameId);
+
+        if (this.bgAudio) this.bgAudio.pause();
+        if (this.gameOverAudio) {
+          this.gameOverAudio.currentTime = 0;
+          this.gameOverAudio.play().catch(() => {});
+        }
       }
     },
     checkScore() {
-      // Safely check if the obstacle passed the player's position (x: 50)
       if (!this.obstaclePassed && this.obstaclePosition.x < 50) {
         this.incrementScore();
         this.obstaclePassed = true;
       }
     },
     incrementScore() {
-      this.score += 1;
+      // Dispatch score addition payload out to Vuex ecosystem
+      this.$store.dispatch('incrementScore');
     },
     resetGame() {
-      this.score = 0;
-      this.gameOver = false;
+      this.stopAllAudio();
+      // Dispatch system reset parameters down into Vuex
+      this.$store.dispatch('resetGame');
       this.obstaclePosition.x = 500;
       this.obstaclePassed = false;
       this.isJumping = false;
@@ -165,12 +209,12 @@ export default {
   width: 40px;
   height: 50px;
   background-color: #3498db;
-  transition: bottom 0.25s ease-out; /* Smooth rising action */
+  transition: bottom 0.25s ease-out;
 }
 
 .player.is-jumping {
-  bottom: 100px; /* Jump ceiling height */
-  transition: bottom 0.25s ease-in; /* Smooth falling action */
+  bottom: 100px;
+  transition: bottom 0.25s ease-in;
 }
 
 .obstacle {
