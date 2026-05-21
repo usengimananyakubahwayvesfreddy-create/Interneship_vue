@@ -1,13 +1,12 @@
 <template>
   <div class="game-container">
-    <!-- Score Dashboard using local fallback or mapGetters -->
+    <!-- Score Dashboard -->
     <div class="score-board-wrapper">
       <div class="score-board">Score: {{ localScore }}</div>
       <div class="speed-board">Difficulty: Lv. {{ difficultyLevel }}</div>
     </div>
 
     <!-- Manual Settings Dashboard -->
-    <!-- FIX: Used localGameOver fallback here -->
     <div class="settings-panel" v-if="!localGameOver">
       <label>Set Difficulty manually: </label>
       <select :value="difficultyLevel" @change="onDifficultySelect">
@@ -20,30 +19,22 @@
 
     <!-- Game Arena Area -->
     <div class="arena">
-      <!-- Player rendered entirely with decoupled coordinates -->
       <div 
         class="player" 
-        :style="{ 
-          bottom: playerY + 'px',
-          left: playerX + 'px'
-        }"
+        :style="{ bottom: playerY + 'px', left: playerX + 'px' }"
       ></div>
       
-      <!-- Obstacle rendered entirely with decoupled coordinates -->
       <div 
         class="obstacle" 
-        :style="{ 
-          left: obstacleX + 'px',
-          bottom: '0px'
-        }"
+        :style="{ left: obstacleX + 'px', bottom: '0px' }"
       ></div>
 
       <!-- Game Over Screen -->
-      <!-- FIX: Uses localGameOver to ensure screen displays under any store state condition -->
       <div v-if="localGameOver" class="game-over-screen">
         <h2>Game Over</h2>
         <p>Final Score: {{ localScore }}</p>
-        <button @click="handleRestart">Try Again</button>
+        <p v-if="isSavingScore" class="saving-text">Saving score to server...</p>
+        <button v-else @click="handleRestart">Try Again</button>
       </div>
     </div>
   </div>
@@ -51,6 +42,8 @@
 
 <script>
 import { mapGetters, mapActions } from 'vuex';
+// Import the game service
+import gameService from '../services/gameService';
 
 import jumpSound from '../assets/sounds/jump.mp3';
 import scoreSound from '../assets/sounds/score.mp3';
@@ -60,11 +53,10 @@ export default {
   name: 'JumpGame',
   data() {
     return {
-      // Local fallbacks bypass store state disconnect bugs safely
       localScore: 0,
-      localGameOver: false, // <-- FIX: Local flag added to control display states
+      localGameOver: false,
+      isSavingScore: false, // UI loader flag during Axios POST execution
       
-      // Numerical physics parameters completely isolated from the layout engine
       arenaWidth: 600,
       playerX: 50,
       playerY: 0,
@@ -87,8 +79,6 @@ export default {
   },
   computed: {
     ...mapGetters(['currentScore', 'difficultyLevel', 'gameOver']),
-    
-    // Dynamic physics speed property that tracks the difficultyLevel state from Vuex
     obstacleSpeed() {
       const baseMovementSpeed = 4;
       return baseMovementSpeed + (this.difficultyLevel * 2);
@@ -124,18 +114,13 @@ export default {
       this.gameLoop();
     },
     gameLoop() {
-      // FIX: Check local fallback variable state
       if (this.localGameOver) return;
 
-      // 1. Move the obstacle left
       this.obstacleX -= this.obstacleSpeed;
 
-      // 2. Process Player Gravity Physics Loop
       if (this.isJumping) {
         this.velocityY -= this.gravity;
         this.playerY += this.velocityY;
-
-        // Verify ground alignment
         if (this.playerY <= 0) {
           this.playerY = 0;
           this.velocityY = 0;
@@ -143,34 +128,47 @@ export default {
         }
       }
 
-      // 3. Process Mathematical Hitbox Collision Check (AABB)
       const hasCollision = 
         this.playerX < this.obstacleX + this.obstacleWidth &&
         this.playerX + this.playerWidth > this.obstacleX &&
         this.playerY < this.obstacleHeight;
 
       if (hasCollision) {
-        this.localGameOver = true; // <-- FIX: Sets local variable immediately to stop gameplay
-        this.setGameOver(true); // Still dispatches to Vuex if required by store architecture
-        if (this.bgAudioInstance) this.bgAudioInstance.pause();
+        this.triggerGameOver();
         return; 
       }
 
-      // 4. Score checking loop (Tracks passing execution points explicitly)
       if (!this.obstaclePassed && this.obstacleX < this.playerX) {
         this.incrementScore();
         this.obstaclePassed = true; 
       }
 
-      // 5. Recycle obstacle offscreen
       if (this.obstacleX < -this.obstacleWidth) {
         this.obstacleX = this.arenaWidth + Math.floor(Math.random() * 100);
         this.obstaclePassed = false; 
       }
 
-      // Continue processing frames if game continues running
       if (!this.localGameOver) {
         this.animationFrameId = requestAnimationFrame(this.gameLoop);
+      }
+    },
+    // Extracted out collision ending parameters into an async sequence handler
+    async triggerGameOver() {
+      this.localGameOver = true;
+      this.setGameOver(true);
+      if (this.bgAudioInstance) this.bgAudioInstance.pause();
+      
+      // Prompt player for assignment requirements check execution 
+      const playerName = prompt("Game Over! Enter your name to submit your score:");
+      if (playerName) {
+        this.isSavingScore = true;
+        try {
+          await gameService.submitHighScore(playerName, this.localScore);
+        } catch (err) {
+          alert("Failed to sync score to backend server.");
+        } finally {
+          this.isSavingScore = false;
+        }
       }
     },
     handleKeyDown(event) {
@@ -204,7 +202,7 @@ export default {
     },
     handleRestart() {
       this.localScore = 0; 
-      this.localGameOver = false; // <-- FIX: Reset local screen visibility state flag
+      this.localGameOver = false;
       this.resetGame(); 
       this.obstacleX = 650;
       this.playerY = 0;
@@ -222,88 +220,16 @@ export default {
 </script>
 
 <style scoped>
-.game-container {
-  position: relative;
-  width: 600px;
-  margin: 20px auto;
-  font-family: Arial, sans-serif;
-}
-
-.score-board-wrapper {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 10px;
-}
-
-.score-board, .speed-board {
-  font-size: 20px;
-  font-weight: bold;
-}
-
-.speed-board {
-  color: #e74c3c;
-}
-
-.settings-panel {
-  background-color: #f9f9f9;
-  padding: 10px;
-  border: 1px solid #ddd;
-  margin-bottom: 15px;
-  border-radius: 4px;
-  font-size: 14px;
-}
-
-select {
-  padding: 4px 8px;
-  font-family: inherit;
-}
-
-.arena {
-  position: relative;
-  width: 600px;
-  height: 200px;
-  background-color: #f0f0f0;
-  border: 2px solid #333;
-  overflow: hidden;
-}
-
-.player {
-  position: absolute;
-  width: 40px;
-  height: 50px;
-  background-color: #3498db;
-}
-
-.obstacle {
-  position: absolute;
-  width: 30px;
-  height: 40px;
-  background-color: #e74c3c;
-}
-
-.game-over-screen {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background-color: rgba(0, 0, 0, 0.8);
-  color: white;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  z-index: 10;
-}
-
-button {
-  padding: 10px 20px;
-  font-size: 16px;
-  cursor: pointer;
-  background-color: #2ecc71;
-  border: none;
-  color: white;
-  border-radius: 5px;
-}
+.game-container { position: relative; width: 600px; margin: 20px auto; font-family: Arial, sans-serif; }
+.score-board-wrapper { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.score-board, .speed-board { font-size: 20px; font-weight: bold; }
+.speed-board { color: #e74c3c; }
+.settings-panel { background-color: #f9f9f9; padding: 10px; border: 1px solid #ddd; margin-bottom: 15px; border-radius: 4px; font-size: 14px; }
+select { padding: 4px 8px; font-family: inherit; }
+.arena { position: relative; width: 600px; height: 200px; background-color: #f0f0f0; border: 2px solid #333; overflow: hidden; }
+.player { position: absolute; width: 40px; height: 50px; background-color: #3498db; }
+.obstacle { position: absolute; width: 30px; height: 40px; background-color: #e74c3c; }
+.game-over-screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.8); color: white; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 10; }
+.saving-text { color: #f1c40f; font-style: italic; }
+button { padding: 10px 20px; font-size: 16px; cursor: pointer; background-color: #2ecc71; border: none; color: white; border-radius: 5px; }
 </style>
