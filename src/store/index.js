@@ -3,25 +3,44 @@ import { createStore } from 'vuex';
 export default createStore({
   state() {
     return {
-      score: 0,
+      gameScore: 0,
+      difficultyLevel: 1,
       gameOver: false
     };
   },
+  getters: {
+    currentScore(state) {
+      return state.gameScore;
+    },
+    difficultyLevel(state) {
+      return state.difficultyLevel;
+    },
+    gameOver(state) {
+      return state.gameOver;
+    }
+  },
   mutations: {
     INCREMENT_SCORE(state) {
-      state.score += 1;
+      state.gameScore += 1;
+    },
+    SET_DIFFICULTY(state, level) {
+      state.difficultyLevel = level;
     },
     SET_GAME_OVER(state, status) {
       state.gameOver = status;
     },
     RESET_GAME_STATE(state) {
-      state.score = 0;
+      state.gameScore = 0;
+      state.difficultyLevel = 1;
       state.gameOver = false;
     }
   },
   actions: {
-    incrementScore({ commit }) {
+    addScore({ commit }) {
       commit('INCREMENT_SCORE');
+    },
+    changeDifficulty({ commit }, level) {
+      commit('SET_DIFFICULTY', level);
     },
     setGameOver({ commit }, status) {
       commit('SET_GAME_OVER', status);

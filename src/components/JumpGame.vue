@@ -1,177 +1,220 @@
 <template>
   <div class="game-container">
-    <!-- Score Display mapped from Vuex -->
-    <div class="score-board">Score: {{ score }}</div>
-
-    <!-- Game Over Screen reading from Vuex -->
-    <div v-if="gameOver" class="game-over-screen">
-      <h2>Game Over</h2>
-      <p>Final Score: {{ score }}</p>
-      <button @click="resetGame">Try Again</button>
+    <!-- Score Dashboard using local fallback or mapGetters -->
+    <div class="score-board-wrapper">
+      <div class="score-board">Score: {{ localScore }}</div>
+      <div class="speed-board">Difficulty: Lv. {{ difficultyLevel }}</div>
     </div>
 
-    <!-- Game Arena -->
-    <div class="arena">
-      <!-- Player Element -->
-      <div ref="playerRef" :class="['player', { 'is-jumping': isJumping }]"></div>
+    <!-- Manual Settings Dashboard -->
+    <!-- FIX: Used localGameOver fallback here -->
+    <div class="settings-panel" v-if="!localGameOver">
+      <label>Set Difficulty manually: </label>
+      <select :value="difficultyLevel" @change="onDifficultySelect">
+        <option :value="1">Level 1 (Slow)</option>
+        <option :value="2">Level 2 (Normal)</option>
+        <option :value="3">Level 3 (Fast)</option>
+        <option :value="4">Level 4 (Insane)</option>
+      </select>
+    </div>
 
-      <!-- Obstacle Element -->
+    <!-- Game Arena Area -->
+    <div class="arena">
+      <!-- Player rendered entirely with decoupled coordinates -->
       <div 
-        ref="obstacleRef" 
-        class="obstacle" 
-        :style="{ left: obstaclePosition.x + 'px' }"
+        class="player" 
+        :style="{ 
+          bottom: playerY + 'px',
+          left: playerX + 'px'
+        }"
       ></div>
+      
+      <!-- Obstacle rendered entirely with decoupled coordinates -->
+      <div 
+        class="obstacle" 
+        :style="{ 
+          left: obstacleX + 'px',
+          bottom: '0px'
+        }"
+      ></div>
+
+      <!-- Game Over Screen -->
+      <!-- FIX: Uses localGameOver to ensure screen displays under any store state condition -->
+      <div v-if="localGameOver" class="game-over-screen">
+        <h2>Game Over</h2>
+        <p>Final Score: {{ localScore }}</p>
+        <button @click="handleRestart">Try Again</button>
+      </div>
     </div>
   </div>
 </template>
 
 <script>
+import { mapGetters, mapActions } from 'vuex';
+
+import jumpSound from '../assets/sounds/jump.mp3';
+import scoreSound from '../assets/sounds/score.mp3';
+import bgMusic from '../assets/sounds/music.mp3';
+
 export default {
   name: 'JumpGame',
   data() {
     return {
-      obstaclePosition: {
-        x: 500
-      },
+      // Local fallbacks bypass store state disconnect bugs safely
+      localScore: 0,
+      localGameOver: false, // <-- FIX: Local flag added to control display states
+      
+      // Numerical physics parameters completely isolated from the layout engine
+      arenaWidth: 600,
+      playerX: 50,
+      playerY: 0,
+      playerWidth: 40,
+      playerHeight: 50,
+      
+      obstacleX: 650,
+      obstacleWidth: 30,
+      obstacleHeight: 40,
+      
+      velocityY: 0,
+      gravity: 0.6,
+      jumpForce: 12,
       isJumping: false,
+      
       animationFrameId: null,
       obstaclePassed: false,
-      bgAudio: null,
-      jumpAudio: null,
-      gameOverAudio: null
+      bgAudioInstance: null
     };
   },
   computed: {
-    // Read state parameters directly out of the shared Vuex instance
-    score() {
-      return this.$store.state.score;
-    },
-    gameOver() {
-      return this.$store.state.gameOver;
+    ...mapGetters(['currentScore', 'difficultyLevel', 'gameOver']),
+    
+    // Dynamic physics speed property that tracks the difficultyLevel state from Vuex
+    obstacleSpeed() {
+      const baseMovementSpeed = 4;
+      return baseMovementSpeed + (this.difficultyLevel * 2);
     }
   },
   mounted() {
-    this.initAudio();
-    this.startGame();
     window.addEventListener('keydown', this.handleKeyDown);
+    this.playMusic();
+    this.startGame();
   },
   beforeUnmount() {
     window.removeEventListener('keydown', this.handleKeyDown);
-    this.stopAllAudio();
-    if (this.animationFrameId) {
-      cancelAnimationFrame(this.animationFrameId);
-    }
+    if (this.bgAudioInstance) this.bgAudioInstance.pause();
+    if (this.animationFrameId) cancelAnimationFrame(this.animationFrameId);
   },
   methods: {
-    initAudio() {
-      this.bgAudio = new Audio('/background.mp3');
-      this.jumpAudio = new Audio('/jump.mp3');
-      this.gameOverAudio = new Audio('/sound.mp3');
-      this.bgAudio.loop = true;
-      this.bgAudio.volume = 0.4;
+    ...mapActions(['addScore', 'changeDifficulty', 'setGameOver', 'resetGame']),
+
+    playSound(soundName) {
+      let audioSource = soundName === 'jump' ? jumpSound : scoreSound;
+      const fx = new Audio(audioSource);
+      fx.currentTime = 0;
+      fx.play().catch(() => {});
     },
-    stopAllAudio() {
-      if (this.bgAudio) {
-        this.bgAudio.pause();
-        this.bgAudio.currentTime = 0;
-      }
-      if (this.jumpAudio) {
-        this.jumpAudio.pause();
-        this.jumpAudio.currentTime = 0;
-      }
-      if (this.gameOverAudio) {
-        this.gameOverAudio.pause();
-        this.gameOverAudio.currentTime = 0;
-      }
+    playMusic() {
+      this.bgAudioInstance = new Audio(bgMusic);
+      this.bgAudioInstance.loop = true;
+      this.bgAudioInstance.volume = 0.4;
+      this.bgAudioInstance.play().catch(() => {});
     },
     startGame() {
-      this.bgAudio.play().catch(() => {
-        console.log("Audio waiting for interaction");
-      });
+      if (this.animationFrameId) cancelAnimationFrame(this.animationFrameId);
       this.gameLoop();
     },
     gameLoop() {
-      if (this.gameOver) return;
+      // FIX: Check local fallback variable state
+      if (this.localGameOver) return;
 
-      this.obstaclePosition.x -= 5;
+      // 1. Move the obstacle left
+      this.obstacleX -= this.obstacleSpeed;
 
-      if (this.obstaclePosition.x < -40) {
-        this.obstaclePosition.x = 600;
-        this.obstaclePassed = false;
+      // 2. Process Player Gravity Physics Loop
+      if (this.isJumping) {
+        this.velocityY -= this.gravity;
+        this.playerY += this.velocityY;
+
+        // Verify ground alignment
+        if (this.playerY <= 0) {
+          this.playerY = 0;
+          this.velocityY = 0;
+          this.isJumping = false;
+        }
       }
 
-      this.checkScore();
-      this.checkCollision();
+      // 3. Process Mathematical Hitbox Collision Check (AABB)
+      const hasCollision = 
+        this.playerX < this.obstacleX + this.obstacleWidth &&
+        this.playerX + this.playerWidth > this.obstacleX &&
+        this.playerY < this.obstacleHeight;
 
-      if (!this.gameOver) {
+      if (hasCollision) {
+        this.localGameOver = true; // <-- FIX: Sets local variable immediately to stop gameplay
+        this.setGameOver(true); // Still dispatches to Vuex if required by store architecture
+        if (this.bgAudioInstance) this.bgAudioInstance.pause();
+        return; 
+      }
+
+      // 4. Score checking loop (Tracks passing execution points explicitly)
+      if (!this.obstaclePassed && this.obstacleX < this.playerX) {
+        this.incrementScore();
+        this.obstaclePassed = true; 
+      }
+
+      // 5. Recycle obstacle offscreen
+      if (this.obstacleX < -this.obstacleWidth) {
+        this.obstacleX = this.arenaWidth + Math.floor(Math.random() * 100);
+        this.obstaclePassed = false; 
+      }
+
+      // Continue processing frames if game continues running
+      if (!this.localGameOver) {
         this.animationFrameId = requestAnimationFrame(this.gameLoop);
       }
     },
     handleKeyDown(event) {
       if (event.code === 'Space') {
         event.preventDefault();
-        if (this.bgAudio && this.bgAudio.paused && !this.gameOver) {
-          this.bgAudio.play().catch(() => {});
+        if (this.bgAudioInstance && this.bgAudioInstance.paused && !this.localGameOver) {
+          this.bgAudioInstance.play().catch(() => {});
         }
         this.jump();
       }
     },
     jump() {
-      if (this.isJumping || this.gameOver) return;
-      
+      if (this.isJumping || this.localGameOver) return;
       this.isJumping = true;
-      if (this.jumpAudio) {
-        this.jumpAudio.currentTime = 0;
-        this.jumpAudio.play().catch(() => {});
-      }
-      setTimeout(() => {
-        this.isJumping = false;
-      }, 500);
-    },
-    checkCollision() {
-      const player = this.$refs.playerRef;
-      const obstacle = this.$refs.obstacleRef;
-
-      if (!player || !obstacle) return;
-
-      const pRect = player.getBoundingClientRect();
-      const oRect = obstacle.getBoundingClientRect();
-
-      const standardCollision = 
-        pRect.right > oRect.left &&
-        pRect.left < oRect.right &&
-        pRect.bottom > oRect.top &&
-        pRect.top < oRect.bottom;
-
-      if (standardCollision) {
-        // Dispatch action to Vuex to change state global tracking
-        this.$store.dispatch('setGameOver', true);
-        cancelAnimationFrame(this.animationFrameId);
-
-        if (this.bgAudio) this.bgAudio.pause();
-        if (this.gameOverAudio) {
-          this.gameOverAudio.currentTime = 0;
-          this.gameOverAudio.play().catch(() => {});
-        }
-      }
-    },
-    checkScore() {
-      if (!this.obstaclePassed && this.obstaclePosition.x < 50) {
-        this.incrementScore();
-        this.obstaclePassed = true;
-      }
+      this.velocityY = this.jumpForce;
+      this.playSound('jump');
     },
     incrementScore() {
-      // Dispatch score addition payload out to Vuex ecosystem
-      this.$store.dispatch('incrementScore');
+      this.localScore += 1;
+      this.addScore(); 
+      this.playSound('score');
+
+      if (this.localScore > 0 && this.localScore % 5 === 0) {
+        const nextLevelTier = this.difficultyLevel + 1;
+        this.changeDifficulty(nextLevelTier);
+      }
     },
-    resetGame() {
-      this.stopAllAudio();
-      // Dispatch system reset parameters down into Vuex
-      this.$store.dispatch('resetGame');
-      this.obstaclePosition.x = 500;
+    onDifficultySelect(event) {
+      const selectedValue = parseInt(event.target.value);
+      this.changeDifficulty(selectedValue);
+    },
+    handleRestart() {
+      this.localScore = 0; 
+      this.localGameOver = false; // <-- FIX: Reset local screen visibility state flag
+      this.resetGame(); 
+      this.obstacleX = 650;
+      this.playerY = 0;
+      this.velocityY = 0;
       this.obstaclePassed = false;
       this.isJumping = false;
+      if (this.bgAudioInstance) {
+        this.bgAudioInstance.currentTime = 0;
+        this.bgAudioInstance.play().catch(() => {});
+      }
       this.startGame();
     }
   }
@@ -186,11 +229,34 @@ export default {
   font-family: Arial, sans-serif;
 }
 
-.score-board {
-  font-size: 24px;
-  font-weight: bold;
+.score-board-wrapper {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   margin-bottom: 10px;
-  text-align: center;
+}
+
+.score-board, .speed-board {
+  font-size: 20px;
+  font-weight: bold;
+}
+
+.speed-board {
+  color: #e74c3c;
+}
+
+.settings-panel {
+  background-color: #f9f9f9;
+  padding: 10px;
+  border: 1px solid #ddd;
+  margin-bottom: 15px;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+select {
+  padding: 4px 8px;
+  font-family: inherit;
 }
 
 .arena {
@@ -204,22 +270,13 @@ export default {
 
 .player {
   position: absolute;
-  left: 50px;
-  bottom: 0;
   width: 40px;
   height: 50px;
   background-color: #3498db;
-  transition: bottom 0.25s ease-out;
-}
-
-.player.is-jumping {
-  bottom: 100px;
-  transition: bottom 0.25s ease-in;
 }
 
 .obstacle {
   position: absolute;
-  bottom: 0;
   width: 30px;
   height: 40px;
   background-color: #e74c3c;
